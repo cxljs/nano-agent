@@ -1,16 +1,15 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log"
-	"os"
 	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
+	"github.com/chzyer/readline"
 )
 
 func main() {
@@ -25,16 +24,22 @@ func main() {
 	}
 	client := anthropic.NewClient(opts...)
 
-	scanner := bufio.NewScanner(os.Stdin)
+	rl, err := readline.New("\x1b[94mYou\x1b[0m: ")
+	if err != nil {
+		log.Fatalf("readline init failed: %s", err)
+	}
+	defer rl.Close()
+
 	getUserMessage := func() (string, bool) {
-		if !scanner.Scan() {
+		input, err := rl.Readline()
+		if err != nil {
 			return "", false
 		}
-		return scanner.Text(), true
+		return input, true
 	}
 
 	agent := NewAgent(&client, getUserMessage, model, Tools)
-	err := agent.Run(context.TODO())
+	err = agent.Run(context.TODO())
 	if err != nil {
 		log.Printf("Error: %s\n", err.Error())
 	}
@@ -82,7 +87,6 @@ func (a *Agent) Run(ctx context.Context) error {
 	readUserInput := true
 	for {
 		if readUserInput {
-			fmt.Print("\x1b[94mYou\x1b[0m: ")
 			userInput, ok := a.getUserMessage()
 			if !ok {
 				break
