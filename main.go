@@ -35,6 +35,9 @@ func main() {
 		if err != nil {
 			return "", false
 		}
+		if strings.TrimSpace(input) == "/exit" {
+			return "", false
+		}
 		return input, true
 	}
 
@@ -82,7 +85,7 @@ func NewAgent(
 func (a *Agent) Run(ctx context.Context) error {
 	conversation := []anthropic.MessageParam{}
 
-	fmt.Println("Chat with Claude (use 'ctrl-c' to quit)")
+	fmt.Println("Chat with Claude (use 'ctrl-c' or '/exit' to quit)")
 
 	readUserInput := true
 	for {
