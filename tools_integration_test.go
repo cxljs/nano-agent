@@ -157,12 +157,70 @@ func TestEditFile_OldStrNotFoundReturnsError(t *testing.T) {
 	assert.Error(t, err, "expected error when old_str is not in file")
 }
 
+func TestBash_ExecutesEcho(t *testing.T) {
+	chdir(t, t.TempDir())
+
+	got, err := callTool(t, BashDefinition, BashInput{Command: "echo hello world"})
+	require.NoError(t, err)
+	assert.Equal(t, "hello world\n", got)
+}
+
+func TestBash_PipesAndRedirectsWork(t *testing.T) {
+	dir := t.TempDir()
+	chdir(t, dir)
+
+	got, err := callTool(t, BashDefinition, BashInput{Command: "echo foo | tr a-z A-Z > out.txt && cat out.txt"})
+	require.NoError(t, err, "bash pipe+touch")
+	assert.Equal(t, "FOO\n", got)
+
+	b, err := os.ReadFile(filepath.Join(dir, "out.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "FOO\n", string(b), "file written by shell redirect")
+}
+
+func TestBash_ReturnsStderrOnError(t *testing.T) {
+	chdir(t, t.TempDir())
+
+	got, err := callTool(t, BashDefinition, BashInput{Command: "ls nonexistent_dir"})
+	assert.Error(t, err)
+	// Both the command error and the tool's own wrapping should be visible,
+	// and the output should contain the actual stderr from ls.
+	assert.Contains(t, got, "No such file or directory", "stderr should be returned")
+}
+
+func TestBash_EmptyCommandRejected(t *testing.T) {
+	chdir(t, t.TempDir())
+
+	_, err := callTool(t, BashDefinition, BashInput{Command: ""})
+	assert.ErrorContains(t, err, "command is required")
+	_, err = callTool(t, BashDefinition, BashInput{Command: "   "})
+	assert.ErrorContains(t, err, "command is required")
+}
+
+func TestBash_HonorsTimeout(t *testing.T) {
+	chdir(t, t.TempDir())
+
+	_, err := callTool(t, BashDefinition, BashInput{Command: "sleep 10", TimeoutMs: 100})
+	assert.ErrorContains(t, err, "timed out")
+}
+
+func TestBash_CapsTimeoutAtMax(t *testing.T) {
+	chdir(t, t.TempDir())
+
+	// 700 seconds > 600 (10 minute) cap. The tool should cap internally and
+	// the sleep should finish well within the capped timeout since we only
+	// sleep 0.01s — the point is the cap doesn't error.
+	got, err := callTool(t, BashDefinition, BashInput{Command: "sleep 0.01 && echo ok", TimeoutMs: 700_000})
+	require.NoError(t, err)
+	assert.Contains(t, got, "ok")
+}
+
 // TestToolsRegistry pins the wiring used by main: the agent receives the
 // exact tools advertised here, by name. If a tool is renamed or dropped, the
 // agent code that constructs ToolUnionParam (main.go) silently goes out of
 // sync with prompts and docs, so we lock the contract.
 func TestToolsRegistry(t *testing.T) {
-	want := []string{"read_file", "list_files", "edit_file"}
+	want := []string{"read_file", "list_files", "edit_file", "bash"}
 	got := make([]string, 0, len(Tools))
 	for _, td := range Tools {
 		got = append(got, td.Name)

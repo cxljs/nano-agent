@@ -1,19 +1,22 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/invopop/jsonschema"
 )
 
-var Tools = []ToolDefinition{ReadFileDefinition, ListFilesDefinition, EditFileDefinition}
+var Tools = []ToolDefinition{ReadFileDefinition, ListFilesDefinition, EditFileDefinition, BashDefinition}
 
 type ToolDefinition struct {
 	Name        string                         `json:"name"`
@@ -172,6 +175,67 @@ func EditFile(input json.RawMessage) (string, error) {
 	}
 
 	return "OK", nil
+}
+
+var BashDefinition = ToolDefinition{
+	Name: "bash",
+	// The model needs to know this is a non-interactive shell so it does not
+	// reach for commands like `vim` or `less` that would hang waiting for a TTY.
+	Desc: `Execute a bash command in a non-interactive shell and return the combined stdout and stderr.
+
+Commands run from the agent's current working directory. Avoid interactive programs (editors, pagers, prompts) — they will hang until timeout. Long-running commands are killed at the timeout (default 30 seconds, max 600).`,
+	InputSchema: BashInputSchema,
+	Function:    Bash,
+}
+
+type BashInput struct {
+	Command   string `json:"command" jsonschema_description:"The bash command line to execute. Passed to 'bash -c' as a single string, so shell features like pipes and redirection work."`
+	TimeoutMs int    `json:"timeout_ms,omitempty" jsonschema_description:"Optional timeout in milliseconds. Defaults to 30000 (30s) if omitted; capped at 600000 (10min)."`
+}
+
+var BashInputSchema = GenerateSchema[BashInput]()
+
+func Bash(input json.RawMessage) (string, error) {
+	bashInput := BashInput{}
+	err := json.Unmarshal(input, &bashInput)
+	if err != nil {
+		log.Panicf("bash err: %s\n", err.Error())
+	}
+
+	if strings.TrimSpace(bashInput.Command) == "" {
+		return "", fmt.Errorf("command is required")
+	}
+
+	// Bound the runtime so a runaway command can't wedge the agent loop.
+	// 30s matches typical CLI tool defaults; the 10min cap mirrors the upper
+	// end of what most shells consider "reasonable" for an interactive task.
+	timeout := 30 * time.Second
+	if bashInput.TimeoutMs > 0 {
+		timeout = time.Duration(bashInput.TimeoutMs) * time.Millisecond
+		if max := 10 * time.Minute; timeout > max {
+			timeout = max
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	// `bash -c` so the model can use pipes, globs, redirection, etc. without
+	// us having to parse a command line ourselves.
+	cmd := exec.CommandContext(ctx, "bash", "-c", bashInput.Command)
+	// Combined output: the model usually wants stderr too (errors, progress),
+	// and separating the two streams would lose interleaving order.
+	out, runErr := cmd.CombinedOutput()
+
+	if ctx.Err() == context.DeadlineExceeded {
+		return string(out), fmt.Errorf("command timed out after %s", timeout)
+	}
+	if runErr != nil {
+		// Return output alongside the error so the model can see *why* the
+		// command failed (stack trace, missing file, etc.), not just the exit code.
+		return string(out), fmt.Errorf("command failed: %w", runErr)
+	}
+	return string(out), nil
 }
 
 func createNewFile(filePath, content string) (string, error) {
