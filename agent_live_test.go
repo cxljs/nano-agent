@@ -10,6 +10,8 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // Live end-to-end test against a real Anthropic-compatible API. It is gated
@@ -70,14 +72,10 @@ func TestLive_AgentReadsFileWithRealModel(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
 	defer cancel()
 
-	if err := agent.Run(ctx); err != nil {
-		t.Fatalf("agent.Run: %v", err)
-	}
+	require.NoError(t, agent.Run(ctx), "agent.Run")
 
 	out := captured.flush()
-	if !strings.Contains(out, sentinel) {
-		t.Errorf("model output does not contain the planted sentinel %q; got:\n%s", sentinel, out)
-	}
+	assert.Contains(t, out, sentinel, "model output does not contain the planted sentinel; got:\n%s", out)
 }
 
 // stdoutCapture replaces os.Stdout with a pipe so we can read what the
@@ -95,9 +93,7 @@ type stdoutCapture struct {
 func newStdoutCapture(t *testing.T) *stdoutCapture {
 	t.Helper()
 	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("pipe: %v", err)
-	}
+	require.NoError(t, err, "pipe")
 	c := &stdoutCapture{
 		orig:   os.Stdout,
 		writer: w,

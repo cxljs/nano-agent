@@ -15,6 +15,8 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // These tests exercise the full agent loop end-to-end: user input → model
@@ -51,11 +53,8 @@ func (s *agentScript) push(msg *anthropic.Message) {
 func (s *agentScript) handler(t *testing.T) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			t.Errorf("mock: read body: %v", err)
-			http.Error(w, err.Error(), 500)
-			return
-		}
+		require.NoError(t, err, "mock: read body")
+
 		var parsed anthropic.MessageNewParams
 		if err := json.Unmarshal(body, &parsed); err != nil {
 			// Don't fail the test — keep the raw body for diagnostics. Some
@@ -180,25 +179,17 @@ func TestAgent_ToolCallRoundtripsResult(t *testing.T) {
 	client := newScriptedClient(t, script)
 	agent := NewAgent(client, scriptedUserInput("what is in readme.md?"), "test-model", Tools)
 
-	if err := agent.Run(t.Context()); err != nil {
-		t.Fatalf("agent.Run: %v", err)
-	}
+	require.NoError(t, agent.Run(t.Context()), "agent.Run")
 
-	if got := script.calls.Load(); got != 2 {
-		t.Fatalf("expected 2 model calls, got %d", got)
-	}
+	assert.Equal(t, int32(2), script.calls.Load(), "expected 2 model calls")
 
 	// The second request is what proves the loop worked: it must carry the
 	// tool_result for call_1 with the file's contents.
 	second := script.requests[1]
 	tr := findToolResult(t, second.Body, "call_1")
 	got := toolResultText(t, tr)
-	if !strings.Contains(got, "hello") {
-		t.Errorf("tool_result for call_1 missing file contents; got %q", got)
-	}
-	if tr.IsError.Value {
-		t.Errorf("tool_result for call_1 unexpectedly marked as error")
-	}
+	assert.Contains(t, got, "hello", "tool_result for call_1 missing file contents")
+	assert.False(t, tr.IsError.Value, "tool_result for call_1 unexpectedly marked as error")
 }
 
 func TestAgent_PropagatesToolErrors(t *testing.T) {
@@ -214,14 +205,10 @@ func TestAgent_PropagatesToolErrors(t *testing.T) {
 
 	client := newScriptedClient(t, script)
 	agent := NewAgent(client, scriptedUserInput("read missing"), "test-model", Tools)
-	if err := agent.Run(t.Context()); err != nil {
-		t.Fatalf("agent.Run: %v", err)
-	}
+	require.NoError(t, agent.Run(t.Context()), "agent.Run")
 
 	tr := findToolResult(t, script.requests[1].Body, "call_err")
-	if !tr.IsError.Value {
-		t.Errorf("tool_result for failed read should be is_error=true; got %+v", tr)
-	}
+	assert.True(t, tr.IsError.Value, "tool_result for failed read should be is_error=true; got %+v", tr)
 }
 
 func TestAgent_UnknownToolNameReportedAsError(t *testing.T) {
@@ -236,17 +223,12 @@ func TestAgent_UnknownToolNameReportedAsError(t *testing.T) {
 
 	client := newScriptedClient(t, script)
 	agent := NewAgent(client, scriptedUserInput("go"), "test-model", Tools)
-	if err := agent.Run(t.Context()); err != nil {
-		t.Fatalf("agent.Run: %v", err)
-	}
+	require.NoError(t, agent.Run(t.Context()), "agent.Run")
 
 	tr := findToolResult(t, script.requests[1].Body, "call_x")
-	if !tr.IsError.Value {
-		t.Errorf("unknown-tool result should be is_error=true")
-	}
-	if got := toolResultText(t, tr); !strings.Contains(strings.ToLower(got), "not found") {
-		t.Errorf("expected 'not found' in tool_result; got %q", got)
-	}
+	assert.True(t, tr.IsError.Value, "unknown-tool result should be is_error=true")
+	got := strings.ToLower(toolResultText(t, tr))
+	assert.Contains(t, got, "not found", "expected 'not found' in tool_result; got %q", got)
 }
 
 func TestAgent_MultiTurnSequencingPreservesHistory(t *testing.T) {
@@ -261,20 +243,13 @@ func TestAgent_MultiTurnSequencingPreservesHistory(t *testing.T) {
 
 	client := newScriptedClient(t, script)
 	agent := NewAgent(client, scriptedUserInput("hello", "you there?"), "test-model", Tools)
-	if err := agent.Run(t.Context()); err != nil {
-		t.Fatalf("agent.Run: %v", err)
-	}
+	require.NoError(t, agent.Run(t.Context()), "agent.Run")
 
-	if got := script.calls.Load(); got != 2 {
-		t.Fatalf("expected 2 model calls, got %d", got)
-	}
+	assert.Equal(t, int32(2), script.calls.Load(), "expected 2 model calls")
 	// The second request must contain all three prior messages:
-	// user1, assistant1, user2. We just check the count and the last role,
-	// which is the load-bearing invariant for multi-turn correctness.
+	// user1, assistant1, user2.
 	msgs := script.requests[1].Body.Messages
-	if len(msgs) != 3 {
-		t.Fatalf("expected 3 messages on second request, got %d (%+v)", len(msgs), msgs)
-	}
+	require.Len(t, msgs, 3, "expected 3 messages on second request")
 }
 
 func TestAgent_EditFileEndToEnd(t *testing.T) {
@@ -296,27 +271,18 @@ func TestAgent_EditFileEndToEnd(t *testing.T) {
 
 	client := newScriptedClient(t, script)
 	agent := NewAgent(client, scriptedUserInput("rename draft to final in note.txt"), "test-model", Tools)
-	if err := agent.Run(t.Context()); err != nil {
-		t.Fatalf("agent.Run: %v", err)
-	}
+	require.NoError(t, agent.Run(t.Context()), "agent.Run")
 
 	got, err := os.ReadFile(filepath.Join(dir, "note.txt"))
-	if err != nil {
-		t.Fatalf("read note.txt: %v", err)
-	}
-	if string(got) != "final body" {
-		t.Errorf("note.txt = %q, want %q", got, "final body")
-	}
+	require.NoError(t, err, "read note.txt")
+	assert.Equal(t, "final body", string(got), "note.txt content")
 
 	// And the edit_file tool_result on the final request should report OK.
 	last := script.requests[len(script.requests)-1]
 	tr := findToolResult(t, last.Body, "c2")
-	if tr.IsError.Value {
-		t.Errorf("edit_file tool_result marked as error: %+v", tr)
-	}
-	if got := toolResultText(t, tr); !strings.Contains(got, "OK") {
-		t.Errorf("expected OK in edit_file tool_result, got %q", got)
-	}
+	assert.False(t, tr.IsError.Value, "edit_file tool_result marked as error")
+	gotText := toolResultText(t, tr)
+	assert.Contains(t, gotText, "OK", "expected OK in edit_file tool_result, got %q", gotText)
 }
 
 func TestAgent_RegistersAllToolsWithAPI(t *testing.T) {
@@ -329,9 +295,7 @@ func TestAgent_RegistersAllToolsWithAPI(t *testing.T) {
 
 	client := newScriptedClient(t, script)
 	agent := NewAgent(client, scriptedUserInput("ping"), "test-model", Tools)
-	if err := agent.Run(t.Context()); err != nil {
-		t.Fatalf("agent.Run: %v", err)
-	}
+	require.NoError(t, agent.Run(t.Context()), "agent.Run")
 
 	advertised := make([]string, 0, len(script.requests[0].Body.Tools))
 	for _, tu := range script.requests[0].Body.Tools {
@@ -340,9 +304,7 @@ func TestAgent_RegistersAllToolsWithAPI(t *testing.T) {
 		}
 	}
 	for _, td := range Tools {
-		if !slices.Contains(advertised, td.Name) {
-			t.Errorf("tool %q was not advertised to the model; got %v", td.Name, advertised)
-		}
+		assert.Contains(t, advertised, td.Name, "tool %q was not advertised to the model", td.Name)
 	}
 }
 
@@ -353,16 +315,12 @@ func TestAgent_RegistersAllToolsWithAPI(t *testing.T) {
 // tool results into one trailing user message.
 func findToolResult(t *testing.T, body anthropic.MessageNewParams, toolUseID string) anthropic.ToolResultBlockParam {
 	t.Helper()
-	if len(body.Messages) == 0 {
-		t.Fatal("request body has no messages")
-	}
+	require.NotEmpty(t, body.Messages, "request body has no messages")
 	last := body.Messages[len(body.Messages)-1]
 	idx := slices.IndexFunc(last.Content, func(b anthropic.ContentBlockParamUnion) bool {
 		return b.OfToolResult != nil && b.OfToolResult.ToolUseID == toolUseID
 	})
-	if idx < 0 {
-		t.Fatalf("no tool_result with id=%q in last message; got %+v", toolUseID, last)
-	}
+	require.GreaterOrEqual(t, idx, 0, "no tool_result with id=%q in last message; got %+v", toolUseID, last)
 	return *last.Content[idx].OfToolResult
 }
 
@@ -377,8 +335,6 @@ func toolResultText(t *testing.T, tr anthropic.ToolResultBlockParam) string {
 			parts = append(parts, c.OfText.Text)
 		}
 	}
-	if len(parts) == 0 {
-		t.Fatalf("tool_result has no text content: %+v", tr)
-	}
+	require.NotEmpty(t, parts, "tool_result has no text content: %+v", tr)
 	return strings.Join(parts, "")
 }
