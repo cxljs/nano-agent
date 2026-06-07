@@ -4,10 +4,10 @@ run:
 	go run .
 
 build:
-	go build -o nano-agent .
+	go build -o duck .
 
 clean:
-	rm -f nano-agent
+	rm -f duck
 
 # Fast suite: tools + agent-with-mock-LLM. No tokens spent.
 # -count=1 disables the test result cache so reruns actually rerun.
